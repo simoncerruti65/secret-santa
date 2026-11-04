@@ -173,7 +173,8 @@ $app.addEventListener("click", async ev0 => {
   if (["rm", "reset", "redraw", "del"].includes(act)) { S.confirm = { type: act, pid }; render(); return; }
   if (act === "invite") {
     const p = e.participants.find(x => x.id === pid);
-    const msg = `Hi ${p.name}! You're in the Secret Santa for ${e.name}${e.date ? " on " + fmtDate(e.date) : ""}${e.budget ? " (budget " + e.budget + ")" : ""}. Here's your personal link. Add your wish list there, and after the draw it will show you who you're buying for. Please keep it to yourself: ${personalLink(e, pid)}`;
+    const dateFr = e.date ? new Date(e.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) : "";
+    const msg = `Coucou ${p.name} ! 🎁 Tu participes au Secret Santa « ${e.name} »${dateFr ? " le " + dateFr : ""}${e.budget ? " (budget : " + e.budget + ")" : ""}. Voici ton lien personnel : ajoute ta liste de souhaits, et après le tirage au sort tu y découvriras pour qui tu offres un cadeau. Garde-le pour toi, il est unique ! ${personalLink(e, pid)}`;
     toast(await copyText(msg) ? "Invite for " + p.name + " copied" : "Couldn't copy. Link: " + personalLink(e, pid));
     return;
   }
