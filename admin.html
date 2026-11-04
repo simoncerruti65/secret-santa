@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Secret Santa Organizer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap wide">
+  <div id="app"><div class="empty"><h2>Organizer</h2><p>Loading…</p></div></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script type="module">
+import { auth, db, configured, esc, fmtDate, toast, copyText, seal, unseal, drawNames, newKey, newId, slug, itemsHtml, notConfiguredHtml } from "./common.js";
+import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const $app = document.getElementById("app");
+const S = { user: null, authReady: false, denied: false, events: [], sel: null, tab: "guests",
+            keys: {}, claims: {}, wishes: {}, confirm: null, busy: false, loaded: false };
+let unsubs = [];
+const ev = () => S.events.find(e => e.id === S.sel);
+const guestBase = new URL("index.html", location.href).href;
+const personalLink = (e, pid) => `${guestBase}?e=${encodeURIComponent(e.id)}&p=${encodeURIComponent(pid)}&k=${encodeURIComponent(S.keys[pid] || "")}`;
+try { S.sel = localStorage.getItem("ss-admin-sel"); } catch (_) {}
+
+function watchEvent(id) {
+  unsubs.forEach(u => u()); unsubs = []; S.keys = {}; S.claims = {}; S.wishes = {};
+  if (!id) return;
+  unsubs.push(onSnapshot(collection(db, "events", id, "keys"), s => { S.keys = {}; s.docs.forEach(d => S.keys[d.id] = d.data().k); render(); }));
+  unsubs.push(onSnapshot(collection(db, "events", id, "claims"), s => { S.claims = {}; s.docs.forEach(d => S.claims[d.id] = d.data()); render(); }));
+  unsubs.push(onSnapshot(collection(db, "events", id, "wishlists"), s => { S.wishes = {}; s.docs.forEach(d => S.wishes[d.id] = d.data()); render(); }));
+}
+function select(id) { S.sel = id; S.confirm = null; try { localStorage.setItem("ss-admin-sel", id || ""); } catch (_) {} watchEvent(id); render(); }
+
+/* ---------- render ---------- */
+function render() {
+  if (!configured) { $app.innerHTML = notConfiguredHtml(); return; }
+  if (!S.authReady) return;
+  if (!S.user || S.user.isAnonymous) {
+    $app.innerHTML = `<div class="pane empty"><p class="eyebrow">Secret Santa</p><h2>Organizer sign-in</h2><p>Sign in with the Google account you set as the organizer.</p><button class="btn big" data-act="signin">Sign in with Google</button></div>`;
+    return;
+  }
+  if (S.denied) {
+    $app.innerHTML = `<div class="pane empty"><h2>This account isn't the organizer</h2><p>You're signed in as ${esc(S.user.email)}. In Firebase › Firestore › Rules, put this address in place of <code>ORGANIZER_EMAIL</code> and publish the rules, then reload.</p><button class="btn ghost" data-act="signout">Sign out</button></div>`;
+    return;
+  }
+  if (!S.loaded) return;
+  const keep = {}; $app.querySelectorAll("input[id],textarea[id],select[id]").forEach(el => { if (!/^(pn-|org-sel)/.test(el.id)) keep[el.id] = el.value; });
+  const active = document.activeElement?.id;
+  const e = ev();
+  $app.innerHTML = `
+    <section class="orgbar" aria-label="Events">
+      <span class="lbl">Organizer · signed in as ${esc(S.user.email)} · <a href="#" data-act="signout" style="color:inherit">sign out</a></span>
+      <div class="grp">
+        <label class="f" for="org-sel">Event<select id="org-sel">${S.events.map(x => `<option value="${x.id}" ${x.id === S.sel ? "selected" : ""}>${esc(x.name)}${x.drawn ? " (drawn)" : ""}</option>`).join("") || "<option>No events yet</option>"}</select></label>
+        <form data-form="newEvent" class="grp"><label class="f" for="ne-name">New event<input id="ne-name" required maxlength="60" placeholder="e.g. Family Christmas"></label><button class="btn ghost" type="submit">Create</button></form>
+      </div>
+    </section>
+    ${e ? eventView(e) : `<div class="pane empty"><h2>No events yet</h2><p>Create your first one above, for example “Family Christmas”, “Friends gift swap” or “Office Secret Santa”.</p></div>`}`;
+  for (const [id, v] of Object.entries(keep)) { const el = document.getElementById(id); if (el && v && el.value !== v && (el.tagName !== "SELECT" || [...el.options].some(o => o.value === v))) el.value = v; }
+  if (active) document.getElementById(active)?.focus();
+}
+
+function eventView(e) {
+  const P = e.participants || [];
+  const wl = P.filter(p => (S.wishes[p.id]?.items || []).length).length;
+  const tabs = [["guests", "Guests"], ["pairs", "Can't-draw pairs"], ["draw", "Draw"], ["settings", "Event details"]];
+  return `<header class="hero"><p class="eyebrow">Secret Santa</p><h1>${esc(e.name)}</h1>
+      <div class="meta">
+        ${e.date ? `<span class="pill plain">${esc(fmtDate(e.date))}</span>` : ""}
+        ${e.budget ? `<span class="pill plain">Budget ${esc(e.budget)}</span>` : ""}
+        <span class="pill">${P.length} guests</span>
+        <span class="pill plain">${wl}/${P.length} wish lists</span>
+        ${e.drawn ? `<span class="pill berry">Names drawn</span>` : `<span class="pill plain">Not drawn yet</span>`}
+      </div></header>
+    <div class="pane">
+      <div class="tabs" role="tablist">${tabs.map(([k, l]) => `<button class="tab" role="tab" data-act="tab" data-tab="${k}" aria-selected="${S.tab === k}">${l}</button>`).join("")}</div>
+      ${({ guests: guestsTab, pairs: pairsTab, draw: drawTab, settings: settingsTab })[S.tab](e)}
+    </div>`;
+}
+
+function guestsTab(e) {
+  const P = e.participants || [];
+  const c = S.confirm;
+  return `<div class="section">
+    <p class="note" style="max-width:70ch">Each guest gets a personal link. With it they add their own wish list and, after the draw, see only their own match. Send each link privately, for example by text message.</p>
+    ${e.drawn ? `<div class="warn">Names are drawn. Renaming is safe. Adding or removing a guest cancels the draw, and you'll need to draw again.</div>` : ""}
+    ${c?.type === "rm" ? `<div class="warn confirm">Remove ${esc(P.find(p => p.id === c.pid)?.name)} and their wish list${e.drawn ? ", and cancel the draw" : ""}? <button class="btn danger" data-act="rmYes">Remove</button><button class="btn ghost" data-act="cancel">Keep</button></div>` : ""}
+    ${c?.type === "reset" ? `<div class="warn confirm">Make a new link for ${esc(P.find(p => p.id === c.pid)?.name)}? Their old link stops working. Their wish list and match stay the same. <button class="btn danger" data-act="resetYes">Make new link</button><button class="btn ghost" data-act="cancel">Cancel</button></div>` : ""}
+    ${P.length ? `<div class="table-wrap"><table class="people"><thead><tr><th>Name</th><th>Opened link</th><th>Wish list</th><th></th></tr></thead><tbody>
+      ${P.map(p => { const n = (S.wishes[p.id]?.items || []).length; const opened = S.claims[p.id] && S.claims[p.id].k === S.keys[p.id];
+        return `<tr><td><input id="pn-${p.id}" data-act="rename" data-pid="${p.id}" value="${esc(p.name)}" maxlength="40" aria-label="Name"></td>
+          <td><span class="status ${opened ? "yes" : "no"}">${opened ? "Yes" : "Not yet"}</span></td>
+          <td><span class="status ${n ? "yes" : "no"}">${n ? n + " wish" + (n > 1 ? "es" : "") : "Empty"}</span></td>
+          <td style="text-align:right;white-space:nowrap"><button class="btn" data-act="invite" data-pid="${p.id}" ${S.keys[p.id] ? "" : "disabled"}>Copy invite</button>
+            <button class="btn ghost" data-act="reset" data-pid="${p.id}" title="Make a new personal link">New link</button>
+            <button class="x" data-act="rm" data-pid="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></td></tr>`; }).join("")}
+    </tbody></table></div>` : `<p class="note">No guests yet. Add names below. You can paste several at once, separated by commas or new lines.</p>`}
+    <form data-form="addPeople" class="row"><input id="ap-names" placeholder="Anna, Ben, Chloe" aria-label="Names to add" autocomplete="off"><button class="btn" type="submit">Add guests</button></form>
+    ${P.length ? `<details><summary>See all wish lists</summary><div class="section" style="margin-top:12px">${P.map(p => `<div><h3>${esc(p.name)}</h3>${itemsHtml(S.wishes[p.id]?.items)}</div>`).join("")}</div></details>` : ""}
+  </div>`;
+}
+
+function pairsTab(e) {
+  const P = e.participants || [], X = e.exclusions || [];
+  const name = id => P.find(p => p.id === id)?.name || "?";
+  return `<div class="section">
+    <p class="note" style="max-width:70ch">Use this for couples, housemates or anyone who already buys for each other. A pair works both ways.</p>
+    ${X.length ? `<ul class="clean excl">${X.map(({ a, b }, i) => `<li><span>${esc(name(a))} ⇄ ${esc(name(b))}</span><button class="x" data-act="rmx" data-i="${i}" aria-label="Remove pair">×</button></li>`).join("")}</ul>` : `<p class="note">No pairs yet.</p>`}
+    ${P.length > 1 ? `<form data-form="addPair" class="row">
+      <select id="px-a" aria-label="First person">${P.map(p => `<option value="${p.id}">${esc(p.name)}</option>`).join("")}</select><span>⇄</span>
+      <select id="px-b" aria-label="Second person">${P.map((p, i) => `<option value="${p.id}" ${i === 1 ? "selected" : ""}>${esc(p.name)}</option>`).join("")}</select>
+      <button class="btn ghost" type="submit">Add pair</button></form>` : `<p class="note">Add at least two guests first.</p>`}
+  </div>`;
+}
+
+function drawTab(e) {
+  const P = e.participants || [];
+  const missingKeys = P.filter(p => !S.keys[p.id]).length;
+  if (!e.drawn) return `<div class="section">
+      <p style="margin:0;max-width:65ch">The draw pairs everyone at random. Nobody gets themselves and every can't-draw pair is respected. Each match is locked to that guest's personal link, so you can take part too without seeing who has whom.</p>
+      ${P.length < 3 ? `<div class="warn">Add at least 3 guests to draw names.</div>` : ""}
+      ${missingKeys ? `<div class="warn">Some guests are still getting their links. Wait a moment.</div>` : ""}
+      <div><button class="btn big" data-act="draw" ${P.length < 3 || missingKeys || S.busy ? "disabled" : ""}>${S.busy ? "Drawing…" : "Draw names"}</button></div></div>`;
+  return `<div class="section">
+      <div class="ok">Names drawn on ${new Date(e.drawnAt).toLocaleString()}. Guests open their personal link to see their match. Their links haven't changed, so there's nothing new to send.</div>
+      ${S.confirm?.type === "redraw" ? `<div class="warn confirm">Draw again? Everyone gets a new match. <button class="btn danger" data-act="redrawYes">Draw again</button><button class="btn ghost" data-act="cancel">Cancel</button></div>`
+        : `<div><button class="btn danger" data-act="redraw" ${S.busy ? "disabled" : ""}>Draw again</button></div>`}</div>`;
+}
+
+function settingsTab(e) {
+  return `<form data-form="settings" class="section" style="max-width:560px">
+      <label class="f" for="st-name">Event name<input id="st-name" value="${esc(e.name)}" maxlength="60" required></label>
+      <div class="grid2"><label class="f" for="st-date">Exchange date<input id="st-date" type="date" value="${esc(e.date || "")}"></label>
+      <label class="f" for="st-budget">Budget<input id="st-budget" value="${esc(e.budget || "")}" maxlength="20" placeholder="e.g. €30"></label></div>
+      <label class="f" for="st-notes">Notes for guests<textarea id="st-notes" rows="3" maxlength="400" placeholder="Where and when you'll swap gifts">${esc(e.notes || "")}</textarea></label>
+      <div><button class="btn" type="submit">Save</button></div></form>
+    <div class="box" style="margin-top:24px;max-width:560px"><h3 style="margin:0">Delete event</h3>
+      ${S.confirm?.type === "del" ? `<div class="warn confirm">Delete “${esc(e.name)}” with all guests, wish lists and the draw? This can't be undone. <button class="btn danger" data-act="delYes">Delete event</button><button class="btn ghost" data-act="cancel">Keep it</button></div>`
+        : `<div><button class="btn danger" data-act="del">Delete this event</button></div>`}</div>`;
+}
+
+/* ---------- actions ---------- */
+const cancelDraw = { drawn: false, drawnAt: null, sealed: {} };
+async function run(fn, okMsg) {
+  try { await fn(); if (okMsg) toast(okMsg); }
+  catch (err) { console.error(err); toast("Couldn't save: " + (err.code || err.message)); }
+}
+async function doDraw(e) {
+  const P = e.participants || [];
+  const m = drawNames(P.map(p => p.id), (e.exclusions || []).map(x => [x.a, x.b]));
+  if (!m) { toast("No valid draw with these pairs. Remove a pair or add guests."); return; }
+  const sealed = {};
+  for (const p of P) sealed[p.id] = await seal(S.keys[p.id], { to: m[p.id] });
+  await updateDoc(doc(db, "events", e.id), { drawn: true, drawnAt: Date.now(), sealed });
+  toast("Names drawn. Guests can now open their links to see their match.");
+}
+
+$app.addEventListener("click", async ev0 => {
+  const b = ev0.target.closest("[data-act]"); if (!b || b.tagName === "INPUT" || b.tagName === "SELECT") return;
+  ev0.preventDefault();
+  const act = b.dataset.act, e = ev(), pid = b.dataset.pid;
+  if (act === "signin") { try { await signInWithPopup(auth, new GoogleAuthProvider()); } catch (err) { toast("Sign-in didn't finish: " + (err.code || err.message)); } return; }
+  if (act === "signout") { await signOut(auth); location.reload(); return; }
+  if (act === "tab") { S.tab = b.dataset.tab; S.confirm = null; render(); return; }
+  if (act === "cancel") { S.confirm = null; render(); return; }
+  if (["rm", "reset", "redraw", "del"].includes(act)) { S.confirm = { type: act, pid }; render(); return; }
+  if (act === "invite") {
+    const p = e.participants.find(x => x.id === pid);
+    const msg = `Hi ${p.name}! You're in the Secret Santa for ${e.name}${e.date ? " on " + fmtDate(e.date) : ""}${e.budget ? " (budget " + e.budget + ")" : ""}. Here's your personal link. Add your wish list there, and after the draw it will show you who you're buying for. Please keep it to yourself: ${personalLink(e, pid)}`;
+    toast(await copyText(msg) ? "Invite for " + p.name + " copied" : "Couldn't copy. Link: " + personalLink(e, pid));
+    return;
+  }
+  if (act === "rmYes") {
+    const c = S.confirm; S.confirm = null;
+    await run(async () => {
+      const batch = writeBatch(db);
+      batch.update(doc(db, "events", e.id), { participants: e.participants.filter(p => p.id !== c.pid), exclusions: (e.exclusions || []).filter(x => x.a !== c.pid && x.b !== c.pid), ...(e.drawn ? cancelDraw : {}) });
+      batch.delete(doc(db, "events", e.id, "keys", c.pid));
+      batch.delete(doc(db, "events", e.id, "claims", c.pid));
+      batch.delete(doc(db, "events", e.id, "wishlists", c.pid));
+      await batch.commit();
+    }, "Guest removed");
+    return;
+  }
+  if (act === "resetYes") {
+    const c = S.confirm; S.confirm = null; const k = newKey();
+    await run(async () => {
+      const batch = writeBatch(db);
+      if (e.drawn && e.sealed?.[c.pid]) {
+        const match = await unseal(S.keys[c.pid], e.sealed[c.pid]);
+        batch.update(doc(db, "events", e.id), { ["sealed." + c.pid]: await seal(k, match) });
+      }
+      batch.set(doc(db, "events", e.id, "keys", c.pid), { k });
+      batch.delete(doc(db, "events", e.id, "claims", c.pid));
+      await batch.commit();
+    }, "New link ready. Copy the invite and send it again.");
+    return;
+  }
+  if (act === "rmx") {
+    const X = [...(e.exclusions || [])]; X.splice(+b.dataset.i, 1);
+    await run(() => updateDoc(doc(db, "events", e.id), { exclusions: X, ...(e.drawn ? cancelDraw : {}) }), e.drawn ? "Pair removed. Draw again to apply it." : "Pair removed");
+    return;
+  }
+  if (act === "draw" || act === "redrawYes") {
+    S.busy = true; S.confirm = null; render();
+    await run(() => doDraw(e)); S.busy = false; render(); return;
+  }
+  if (act === "delYes") {
+    S.confirm = null;
+    await run(async () => {
+      const batch = writeBatch(db);
+      const ids = new Set([...(e.participants || []).map(p => p.id), ...Object.keys(S.keys), ...Object.keys(S.claims), ...Object.keys(S.wishes)]);
+      ids.forEach(p => ["keys", "claims", "wishlists"].forEach(c => batch.delete(doc(db, "events", e.id, c, p))));
+      batch.delete(doc(db, "events", e.id));
+      await batch.commit();
+      select(S.events.find(x => x.id !== e.id)?.id || null);
+    }, "Event deleted");
+    return;
+  }
+});
+
+$app.addEventListener("change", async ev0 => {
+  const t = ev0.target, e = ev();
+  if (t.id === "org-sel") { select(t.value); return; }
+  if (t.dataset.act === "rename") {
+    const v = t.value.trim(); if (!v) { render(); return; }
+    await run(() => updateDoc(doc(db, "events", e.id), { participants: e.participants.map(p => p.id === t.dataset.pid ? { ...p, name: v.slice(0, 40) } : p) }), "Name saved");
+  }
+});
+
+$app.addEventListener("submit", async ev0 => {
+  ev0.preventDefault();
+  const f = ev0.target.dataset.form, e = ev(), v = id => document.getElementById(id).value.trim();
+  if (f === "newEvent") {
+    const name = v("ne-name"); if (!name) return;
+    const id = slug(name) + "-" + newId(6);
+    await run(async () => {
+      await setDoc(doc(db, "events", id), { name, date: "", budget: "", notes: "", participants: [], exclusions: [], drawn: false, drawnAt: null, sealed: {}, createdAt: serverTimestamp() });
+      document.getElementById("ne-name").value = ""; S.tab = "guests"; select(id);
+    }, "Created " + name);
+    return;
+  }
+  if (f === "addPeople") {
+    const names = v("ap-names").split(/[,\n;]/).map(s => s.trim()).filter(Boolean); if (!names.length) return;
+    const have = new Set((e.participants || []).map(p => p.name.toLowerCase()));
+    const add = names.filter(n => !have.has(n.toLowerCase())).map(n => ({ id: newId(6), name: n.slice(0, 40) }));
+    if (!add.length) { toast("Those names are already on the list"); return; }
+    await run(async () => {
+      const batch = writeBatch(db);
+      batch.update(doc(db, "events", e.id), { participants: [...(e.participants || []), ...add], ...(e.drawn ? cancelDraw : {}) });
+      add.forEach(p => batch.set(doc(db, "events", e.id, "keys", p.id), { k: newKey() }));
+      await batch.commit();
+      document.getElementById("ap-names").value = "";
+    }, e.drawn ? "Added. The draw was cancelled, so draw again." : `Added ${add.length} guest${add.length > 1 ? "s" : ""}`);
+    return;
+  }
+  if (f === "addPair") {
+    const a = v("px-a"), b = v("px-b"); if (a === b) { toast("Pick two different people"); return; }
+    const X = e.exclusions || [];
+    if (X.some(({ a: p, b: q }) => (p === a && q === b) || (p === b && q === a))) { toast("That pair already exists"); return; }
+    await run(() => updateDoc(doc(db, "events", e.id), { exclusions: [...X, { a, b }], ...(e.drawn ? cancelDraw : {}) }), e.drawn ? "Pair added. Draw again to apply it." : "Pair added");
+    return;
+  }
+  if (f === "settings") {
+    await run(() => updateDoc(doc(db, "events", e.id), { name: v("st-name") || e.name, date: v("st-date"), budget: v("st-budget"), notes: document.getElementById("st-notes").value.trim() }), "Saved");
+  }
+});
+
+if (configured) {
+  onAuthStateChanged(auth, user => {
+    S.user = user; S.authReady = true; S.denied = false;
+    if (user && !user.isAnonymous) {
+      onSnapshot(collection(db, "events"), snap => {
+        S.events = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.date || "9").localeCompare(b.date || "9") || a.name.localeCompare(b.name));
+        S.loaded = true;
+        if (!ev()) select(S.events[0]?.id || null); else if (!unsubs.length) watchEvent(S.sel);
+        render();
+      }, err => { if (err.code === "permission-denied") { S.denied = true; render(); } else toast("Couldn't load events: " + err.code); });
+    }
+    render();
+  });
+}
+render();
+</script>
+</body>
+</html>

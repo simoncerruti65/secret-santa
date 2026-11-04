@@ -1,0 +1,160 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>Secret Santa</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Young+Serif&family=Figtree:wght@400;500;600;700&family=IBM+Plex+Mono:wght@500&display=swap">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="wrap">
+  <div id="app"><div class="empty"><h2>Secret Santa</h2><p>Unwrapping the details…</p></div></div>
+</div>
+<div class="toast" id="toast" hidden></div>
+
+<script type="module">
+import { auth, db, configured, esc, fmtDate, toast, unseal, itemsHtml, notConfiguredHtml } from "./common.js";
+import { signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { doc, setDoc, onSnapshot, collection, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+
+const $app = document.getElementById("app");
+const q = new URLSearchParams(location.search);
+const eid = q.get("e");
+let pid = q.get("p"), key = q.get("k");
+
+// Remember this guest's personal link on this device, so a plain event link still works later.
+const store = { get(){ try{ return JSON.parse(localStorage.getItem("ss-guest")||"{}") }catch(_){ return {} } },
+                set(v){ try{ localStorage.setItem("ss-guest", JSON.stringify(v)) }catch(_){ } } };
+if (eid && pid && key) { const s = store.get(); s[eid] = { pid, key }; store.set(s); }
+else if (eid) { const s = store.get()[eid]; if (s) { pid = s.pid; key = s.key; } }
+if (eid && pid && key && (q.get("p") || q.get("k"))) {
+  // Tidy the address bar so the key isn't left on screen or in shared screenshots.
+  try { history.replaceState(null, "", location.pathname + "?e=" + encodeURIComponent(eid)); } catch (_) {}
+}
+
+const S = { event: null, wishes: {}, claimed: false, claimError: null, match: null, revealing: false, loaded: false, error: null };
+const me = () => (S.event?.participants || []).find(p => p.id === pid);
+
+function render() {
+  if (!configured) { $app.innerHTML = notConfiguredHtml(); return; }
+  if (!eid) { $app.innerHTML = `<div class="pane empty"><h2>Secret Santa</h2><p>Open the personal link the organizer sent you to see your gift exchange.</p></div>`; return; }
+  if (S.error) { $app.innerHTML = `<div class="pane empty"><h2>We couldn't find this gift exchange</h2><p>Check that you opened the full link from your invitation. If it still doesn't work, ask the organizer to send it again.</p></div>`; return; }
+  if (!S.loaded) return;
+  const e = S.event, P = e.participants || [], m = me();
+  document.title = e.name + " · Secret Santa";
+  const keepVals = {}; $app.querySelectorAll("input[id]").forEach(el => keepVals[el.id] = el.value);
+  const active = document.activeElement?.id;
+
+  const myItems = S.wishes[pid]?.items || [];
+  const canEdit = S.claimed && m;
+  let html = `<header class="hero">
+      <p class="eyebrow">Secret Santa</p>
+      <h1>${esc(e.name)}</h1>
+      <div class="meta">
+        ${e.date ? `<span class="pill plain">${esc(fmtDate(e.date))}</span>` : ""}
+        ${e.budget ? `<span class="pill plain">Budget ${esc(e.budget)}</span>` : ""}
+        <span class="pill">${P.length} people</span>
+        ${e.drawn ? `<span class="pill berry">Names drawn</span>` : `<span class="pill plain">Draw coming soon</span>`}
+      </div>
+      ${m ? `<p class="hello">Hi ${esc(m.name)}! ${e.drawn ? "Names have been drawn. Find out who you're buying for below." : "Add a few ideas to your wish list so your Secret Santa knows what you'd love."}</p>` : ""}
+      ${e.notes ? `<p class="note" style="max-width:65ch">${esc(e.notes)}</p>` : ""}
+    </header><div class="page">`;
+
+  if (!m) {
+    html += `<div class="pane"><p style="margin:0">${pid ? "This personal link is no longer valid. Ask the organizer for a new one." : "To add your wish list and see your match, open the personal link the organizer sent you."}</p></div>`;
+  } else if (S.claimError) {
+    html += `<div class="warn">This personal link has been replaced. Ask the organizer to send you your new link.</div>`;
+  }
+
+  if (m && e.drawn) {
+    if (S.match) {
+      const rec = P.find(p => p.id === S.match.to);
+      html += `<section class="pane section"><div class="reveal anim"><div class="lbl">You are buying for</div>
+          <div class="who">${esc(rec ? rec.name : "someone who has left the exchange")}</div>
+          ${e.budget ? `<div class="note">Budget ${esc(e.budget)}${e.date ? " · exchange " + esc(fmtDate(e.date)) : ""}</div>` : ""}</div>
+          <div><h3>${esc(rec?.name || "Their")}'s wish list</h3>${itemsHtml(S.wishes[S.match.to]?.items)}</div>
+          <div><button class="btn ghost" data-act="hide">Hide my match</button></div></section>`;
+    } else {
+      html += `<section class="pane section" style="text-align:center;align-items:center">
+          <h2 style="margin:0">Your match is ready</h2>
+          <p class="note">Make sure nobody is looking over your shoulder.</p>
+          <button class="btn big" data-act="reveal" ${S.revealing ? "disabled" : ""}>${S.revealing ? "Unwrapping…" : "Reveal who I'm buying for"}</button></section>`;
+    }
+  }
+
+  if (m) {
+    html += `<section class="pane section"><h2 style="margin:0">My wish list</h2>
+      ${itemsHtml(myItems, { editable: canEdit })}
+      ${canEdit ? `<form data-form="addWish" class="box">
+        <label class="f" for="w-t">Wish<input id="w-t" required maxlength="120" placeholder="e.g. A good paperback thriller"></label>
+        <div class="grid2"><label class="f" for="w-l">Link (optional)<input id="w-l" maxlength="300" placeholder="https://…" inputmode="url"></label>
+        <label class="f" for="w-n">Note (optional)<input id="w-n" maxlength="200" placeholder="Size M, any colour but orange"></label></div>
+        <div><button class="btn" type="submit">Add to my list</button></div></form>` : (S.claimError ? "" : `<p class="note">Connecting…</p>`)}
+      </section>`;
+  }
+
+  const others = P.filter(p => p.id !== pid);
+  if (others.length) {
+    html += `<section class="pane"><details><summary>Everyone else's wish lists</summary><div class="section" style="margin-top:14px">
+      ${others.map(p => `<div><h3>${esc(p.name)}</h3>${itemsHtml(S.wishes[p.id]?.items)}</div>`).join("")}
+    </div></details></section>`;
+  }
+  html += `</div><footer class="foot">Your match is private. Only your personal link can reveal it.</footer>`;
+  $app.innerHTML = html;
+  for (const [id, v] of Object.entries(keepVals)) { const el = document.getElementById(id); if (el && v) el.value = v; }
+  if (active) document.getElementById(active)?.focus();
+}
+
+async function saveWishes(items) {
+  try { await setDoc(doc(db, "events", eid, "wishlists", pid), { items, updatedAt: serverTimestamp() }); return true; }
+  catch (err) { toast("Couldn't save your wish list. Reload the page and try again."); return false; }
+}
+
+$app.addEventListener("click", async ev => {
+  const b = ev.target.closest("[data-act]"); if (!b) return;
+  if (b.dataset.act === "reveal") {
+    const box = S.event.sealed?.[pid];
+    if (!box) { toast("Your match isn't ready yet. Ask the organizer."); return; }
+    S.revealing = true; render();
+    try { S.match = await unseal(key, box); } catch (_) { toast("This link can't open the current draw. Ask the organizer for your latest link."); }
+    S.revealing = false; render();
+  }
+  if (b.dataset.act === "hide") { S.match = null; render(); }
+  if (b.dataset.act === "rmw") {
+    const items = [...(S.wishes[pid]?.items || [])]; items.splice(+b.dataset.i, 1); await saveWishes(items);
+  }
+});
+$app.addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const v = id => document.getElementById(id).value.trim();
+  const t = v("w-t"); if (!t) return;
+  const items = [...(S.wishes[pid]?.items || []), { t, link: v("w-l"), n: v("w-n") }];
+  if (await saveWishes(items)) { ["w-t", "w-l", "w-n"].forEach(id => document.getElementById(id).value = ""); toast("Added to your wish list"); }
+});
+
+if (configured && eid) {
+  onAuthStateChanged(auth, async user => {
+    if (!user) { try { await signInAnonymously(auth); } catch (e) { S.error = "auth"; render(); } return; }
+    if (pid && key) {
+      try { await setDoc(doc(db, "events", eid, "claims", pid), { uid: user.uid, k: key, at: serverTimestamp() }); S.claimed = true; }
+      catch (_) { S.claimError = true; }
+    }
+    onSnapshot(doc(db, "events", eid), snap => {
+      if (!snap.exists()) { S.error = "missing"; render(); return; }
+      const prevSealed = JSON.stringify(S.event?.sealed || {});
+      S.event = snap.data(); S.loaded = true;
+      if (JSON.stringify(S.event.sealed || {}) !== prevSealed) S.match = null; // a new draw hides the old match
+      render();
+    }, () => { S.error = "denied"; render(); });
+    onSnapshot(collection(db, "events", eid, "wishlists"), snap => {
+      S.wishes = {}; snap.docs.forEach(d => S.wishes[d.id] = d.data()); render();
+    }, () => {});
+  });
+}
+render();
+</script>
+</body>
+</html>

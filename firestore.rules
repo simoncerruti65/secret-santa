@@ -1,0 +1,52 @@
+rules_version = '2';
+
+// Before publishing these rules in the Firebase console, replace ORGANIZER_EMAIL
+// with the Google account you will sign in with on admin.html.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isAdmin() {
+      return signedIn()
+        && request.auth.token.email_verified == true
+        && request.auth.token.email in ['ORGANIZER_EMAIL'];
+    }
+    function keyDoc(eid, pid) { return /databases/$(db)/documents/events/$(eid)/keys/$(pid); }
+    function claimDoc(eid, pid) { return /databases/$(db)/documents/events/$(eid)/claims/$(pid); }
+
+    match /events/{eid} {
+      // Guests can open one event if they know its id; only the organizer can list them all.
+      allow get: if signedIn();
+      allow list, write: if isAdmin();
+
+      // Each guest's personal key. Never readable by guests.
+      match /keys/{pid} {
+        allow read, write: if isAdmin();
+      }
+
+      // A browser proves it holds a guest's personal key and becomes that guest.
+      match /claims/{pid} {
+        allow read: if isAdmin() || (signedIn() && resource.data.uid == request.auth.uid);
+        allow create, update: if signedIn()
+          && request.resource.data.keys().hasOnly(['uid', 'k', 'at'])
+          && request.resource.data.uid == request.auth.uid
+          && exists(keyDoc(eid, pid))
+          && request.resource.data.k == get(keyDoc(eid, pid)).data.k;
+        allow delete: if isAdmin();
+      }
+
+      // Wish lists: everyone in the event can read; only the guest who claimed it can write.
+      match /wishlists/{pid} {
+        allow read: if signedIn();
+        allow delete: if isAdmin();
+        allow create, update: if isAdmin() || (signedIn()
+          && exists(claimDoc(eid, pid))
+          && get(claimDoc(eid, pid)).data.uid == request.auth.uid
+          && get(claimDoc(eid, pid)).data.k == get(keyDoc(eid, pid)).data.k
+          && request.resource.data.keys().hasOnly(['items', 'updatedAt'])
+          && request.resource.data.items is list
+          && request.resource.data.items.size() <= 40);
+      }
+    }
+  }
+}
