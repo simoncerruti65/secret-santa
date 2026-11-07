@@ -17,7 +17,7 @@
 
 <script type="module">
 import { auth, db, configured, esc, fmtDate, toast, copyText, seal, unseal, drawNames, newKey, newId, slug, itemsHtml, notConfiguredHtml } from "./common.js";
-import { GoogleAuthProvider, signInWithPopup, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import { GoogleAuthProvider, signInWithPopup, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import { doc, setDoc, updateDoc, deleteDoc, onSnapshot, collection, writeBatch, serverTimestamp } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 
 const $app = document.getElementById("app");
@@ -43,11 +43,15 @@ function render() {
   if (!configured) { $app.innerHTML = notConfiguredHtml(); return; }
   if (!S.authReady) return;
   if (!S.user || S.user.isAnonymous) {
-    $app.innerHTML = `<div class="pane empty"><p class="eyebrow">Secret Santa</p><h2>Organizer sign-in</h2><p>Sign in with the Google account you set as the organizer.</p><button class="btn big" data-act="signin">Sign in with Google</button></div>`;
+    $app.innerHTML = `<div class="pane empty"><p class="eyebrow">Secret Santa</p><h2>Organizer sign-in</h2><p>Sign in with your organizer account.</p><form data-form="pwSignin" class="box" style="max-width:340px;margin:16px auto 0;text-align:left">
+        <label class="f" for="si-email">Email<input id="si-email" type="email" autocomplete="username" required></label>
+        <label class="f" for="si-pass">Password<input id="si-pass" type="password" autocomplete="current-password" required></label>
+        <button class="btn big" type="submit">Sign in</button></form>
+      <p class="note" style="margin-top:16px">or <a href="#" data-act="signin" style="color:inherit">sign in with Google</a></p></div>`;
     return;
   }
   if (S.denied) {
-    $app.innerHTML = `<div class="pane empty"><h2>This account isn't the organizer</h2><p>You're signed in as ${esc(S.user.email)}. In Firebase › Firestore › Rules, put this address in place of <code>ORGANIZER_EMAIL</code> and publish the rules, then reload.</p><button class="btn ghost" data-act="signout">Sign out</button></div>`;
+    $app.innerHTML = `<div class="pane empty"><h2>This account isn't the organizer</h2><p>You're signed in as ${esc(S.user.email)}. In Firebase › Firestore › Rules, make sure this account's User UID is in the Firestore rules, publish them, then reload.</p><button class="btn ghost" data-act="signout">Sign out</button></div>`;
     return;
   }
   if (!S.loaded) return;
@@ -239,6 +243,12 @@ $app.addEventListener("change", async ev0 => {
 $app.addEventListener("submit", async ev0 => {
   ev0.preventDefault();
   const f = ev0.target.dataset.form, e = ev(), v = id => document.getElementById(id).value.trim();
+  if (f === "pwSignin") {
+    const btn = ev0.target.querySelector("button"); btn.disabled = true;
+    try { await signInWithEmailAndPassword(auth, v("si-email"), document.getElementById("si-pass").value); }
+    catch (err) { btn.disabled = false; toast(/invalid|wrong|not-found|credential/.test(err.code || "") ? "Wrong email or password" : "Sign-in failed: " + (err.code || err.message)); }
+    return;
+  }
   if (f === "newEvent") {
     const name = v("ne-name"); if (!name) return;
     const id = slug(name) + "-" + newId(6);

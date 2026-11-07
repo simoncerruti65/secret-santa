@@ -1,15 +1,17 @@
 rules_version = '2';
 
-// Before publishing these rules in the Firebase console, replace ORGANIZER_EMAIL
-// with the Google account you will sign in with on admin.html.
+// Before publishing in the Firebase console: replace ORGANIZER_UID with the User UID of
+// your email/password organizer account (Authentication > Users), and ORGANIZER_EMAIL
+// with your Google address if you also sign in with Google.
 service cloud.firestore {
   match /databases/{db}/documents {
 
     function signedIn() { return request.auth != null; }
     function isAdmin() {
-      return signedIn()
-        && request.auth.token.email_verified == true
-        && request.auth.token.email in ['ORGANIZER_EMAIL'];
+      return signedIn() && (
+        request.auth.uid in ['ORGANIZER_UID']
+        || (request.auth.token.email_verified == true
+            && request.auth.token.email in ['ORGANIZER_EMAIL']));
     }
     function keyDoc(eid, pid) { return /databases/$(db)/documents/events/$(eid)/keys/$(pid); }
     function claimDoc(eid, pid) { return /databases/$(db)/documents/events/$(eid)/claims/$(pid); }

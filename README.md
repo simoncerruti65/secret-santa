@@ -3,7 +3,7 @@
 A small website for running Secret Santa exchanges. It's free to host on GitHub Pages, and Firebase stores the data.
 
 - **index.html** is the guest page. Each guest opens their own personal link. They see one event, edit only their own wish list, and after the draw see only their own match.
-- **admin.html** is the organizer page. You sign in with Google to create events, add guests, set can't-draw pairs, run the draw, and copy each guest's invite.
+- **admin.html** is the organizer page. You sign in with email and password (or Google) to create events, add guests, set can't-draw pairs, run the draw, and copy each guest's invite.
 
 ## How privacy works
 
@@ -16,9 +16,10 @@ A small website for running Secret Santa exchanges. It's free to host on GitHub 
 
 1. **Firebase project**: console.firebase.google.com › Create a project.
    - Build › Firestore Database › Create database (production mode).
-   - Build › Authentication › Sign-in method: enable **Anonymous** and **Google**.
+   - Build › Authentication › Sign-in method: enable **Anonymous** and **Email/Password** (Google is optional).
+   - Authentication › Users › Add user: create your organizer account and copy its **User UID**.
    - Authentication › Settings › Authorized domains: add `<your-github-username>.github.io`.
    - Project settings › Your apps › Web app: copy the config into `firebase-config.js`.
-2. **Security rules**: copy `firestore.rules` into Firestore › Rules. Replace `ORGANIZER_EMAIL` with your Google address, then click Publish. Your email lives only in the Firebase console and never goes in this repo.
+2. **Security rules**: copy `firestore.rules` into Firestore › Rules. Replace `ORGANIZER_UID` with that User UID (and `ORGANIZER_EMAIL` with your Google address if you use Google sign-in), then click Publish. These stay in the Firebase console and never go in this repo.
 3. **GitHub Pages**: repo Settings › Pages › Deploy from a branch › `main` / root.
 4. Open `https://<your-github-username>.github.io/<repo>/admin.html` and sign in.
