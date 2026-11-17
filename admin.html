@@ -90,7 +90,7 @@ function eventView(e) {
 }
 
 function guestsTab(e) {
-  const P = e.participants || [];
+  const P = [...(e.participants || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   const c = S.confirm;
   return `<div class="section">
     <p class="note" style="max-width:70ch">Each guest gets a personal link. With it they add their own wish list and, after the draw, see only their own match. Send each link privately, for example by text message.</p>
@@ -113,7 +113,7 @@ function guestsTab(e) {
 }
 
 function pairsTab(e) {
-  const P = e.participants || [], X = e.exclusions || [];
+  const P = [...(e.participants || [])].sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" })), X = e.exclusions || [];
   const name = id => P.find(p => p.id === id)?.name || "?";
   return `<div class="section">
     <p class="note" style="max-width:70ch">Use this for couples, housemates or anyone who already buys for each other. A pair works both ways.</p>
