@@ -103,6 +103,7 @@ function guestsTab(e) {
           <td><span class="status ${opened ? "yes" : "no"}">${opened ? "Yes" : "Not yet"}</span></td>
           <td><span class="status ${n ? "yes" : "no"}">${n ? n + " wish" + (n > 1 ? "es" : "") : "Empty"}</span></td>
           <td style="text-align:right;white-space:nowrap"><button class="btn" data-act="invite" data-pid="${p.id}" ${S.keys[p.id] ? "" : "disabled"}>Copy invite</button>
+            <button class="btn ghost" data-act="teams" data-pid="${p.id}" ${S.keys[p.id] ? "" : "disabled"} title="English message for a private Teams chat">Copy for Teams</button>
             <button class="btn ghost" data-act="reset" data-pid="${p.id}" title="Make a new personal link">New link</button>
             <button class="x" data-act="rm" data-pid="${p.id}" aria-label="Remove ${esc(p.name)}">×</button></td></tr>`; }).join("")}
     </tbody></table></div>` : `<p class="note">No guests yet. Add names below. You can paste several at once, separated by commas or new lines.</p>`}
@@ -175,6 +176,12 @@ $app.addEventListener("click", async ev0 => {
   if (act === "tab") { S.tab = b.dataset.tab; S.confirm = null; render(); return; }
   if (act === "cancel") { S.confirm = null; render(); return; }
   if (["rm", "reset", "redraw", "del"].includes(act)) { S.confirm = { type: act, pid }; render(); return; }
+  if (act === "teams") {
+    const p = e.participants.find(x => x.id === pid);
+    const msg = `Hi ${p.name}! 🎁 Here's your personal Secret Santa link: ${personalLink(e, pid)}\nOpen it and tap "Reveal who I'm buying for" to discover your colleague, and add a few ideas to your own wish list while you're there. The link is yours only, so please don't share it. 🤫`;
+    toast(await copyText(msg) ? "Teams message for " + p.name + " copied" : "Couldn't copy. Link: " + personalLink(e, pid));
+    return;
+  }
   if (act === "invite") {
     const p = e.participants.find(x => x.id === pid);
     const dateFr = e.date ? new Date(e.date + "T12:00:00").toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" }) : "";
