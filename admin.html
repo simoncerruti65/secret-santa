@@ -178,7 +178,8 @@ $app.addEventListener("click", async ev0 => {
   if (["rm", "reset", "redraw", "del"].includes(act)) { S.confirm = { type: act, pid }; render(); return; }
   if (act === "teams") {
     const p = e.participants.find(x => x.id === pid);
-    const msg = `Hi ${p.name}! 🎁 Here's your personal Secret Santa link: ${personalLink(e, pid)}\nOpen it and tap "Reveal who I'm buying for" to discover your colleague, and add a few ideas to your own wish list while you're there. The link is yours only, so please don't share it. 🤫`;
+    const dateEn = e.date ? new Date(e.date + "T12:00:00").toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) : "";
+    const msg = `Hi ${p.name}! 🎁 You're part of the Secret Santa for the ${e.name}${dateEn ? " on " + dateEn : ""}${e.budget ? " (budget: " + e.budget + ")" : ""}. Here's your personal link: ${personalLink(e, pid)}\nOpen it and tap "Reveal who I'm buying for" to discover your colleague, and add a few ideas to your own wish list while you're there. The link is yours only, so please don't share it. 🤫`;
     toast(await copyText(msg) ? "Teams message for " + p.name + " copied" : "Couldn't copy. Link: " + personalLink(e, pid));
     return;
   }
