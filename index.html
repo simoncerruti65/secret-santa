@@ -96,7 +96,7 @@ function render() {
       </section>`;
   }
 
-  const others = P.filter(p => p.id !== pid);
+  const others = P.filter(p => p.id !== pid).sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
   if (others.length) {
     html += `<section class="pane"><details><summary>Everyone else's wish lists</summary><div class="section" style="margin-top:14px">
       ${others.map(p => `<div><h3>${esc(p.name)}</h3>${itemsHtml(S.wishes[p.id]?.items)}</div>`).join("")}
